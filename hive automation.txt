@@ -1,0 +1,28 @@
+cd /home/bauuser/workspace/hive-test/test/
+
+python logerror.py
+
+#db=`cut -d '=' -f2 logerror.out | head -1`
+#table=`cut -d '=' -f2 logerror.out | head -2 | tail -1`
+#cc=`cut -d '=' -f2 logerror.out | head -3 | tail -1`
+
+db=integratestagingdb
+table=territorystores
+cc=AU
+
+echo desc `echo $db`.`echo $table` > aml.sql
+
+/usr/bin/hive -f aml.sql > out.txt 
+
+cat out.txt |awk '{print $1}' | grep -v "#" | uniq -u | uniq | tr '\n' ',' |  sed '$s/,$//'> out2.txt
+
+echo "select `cat out2.txt | cut -d',' -f1 out2.txt`,count(1) from `echo $db`.`echo $table` where country_code ='`echo $cc`' group by `cat out2.txt | cut -d',' -f1 out2.txt` having count(1) >1" >aml1.sql
+
+/usr/bin/hive -f aml1.sql 
+
+
+echo "insert overwrite table `echo $db`.`echo $table` partition(country_code) select `cat out2.txt` from ( select *,row_number() over(partition by `cat out2.txt | cut -d',' -f1 out2.txt`,createdate order by lastupdatedate desc) as rank from `echo $db`.`echo $table` where country_code='`echo $cc`') as a where a.rank=1" > aml2.sql
+
+/usr/bin/hive -f aml2.sql 
+
+/usr/bin/hive -f aml1.sql
