@@ -1,0 +1,167 @@
+import pandas as pd
+from pandas import ExcelWriter
+from pandas import ExcelFile
+import re
+import os
+from pathlib import Path
+import json
+import operator
+import difflib
+import itertools
+
+# import ssh
+from paramiko import SSHClient
+
+# import parami
+
+dateRegEx = "\\d{2}[/|-]\\d{2}[/|-]\\d{2}\\s{0,}\\d{2}[:]\\d{2}[:]\\d{2}"
+errorRegEx = "\\d{0,}[/|-]\\d{0,}[/|-]\\d{0,}\\s{0,}\\d{0,}[:]\\d{0,}[:]\\d{0,}\\s{0,}\[\\w+\]:\\s{0,}ER\\w+\\s{0,}\\w+.*"
+errorStatusRegEx = "\\w+:\\s{0,}\\w+:\\s{0,}\\w+ed"
+errorCuasedByRegEx = "caus\\w+\\s{0,}by.*"
+dbnameRegEx = "db\\w+[:]\\w+"
+tablenameRegeEx = "tab\\w+:\\w+"
+
+startTime = "(\d{2}[/|-]\d{2}[/|-]\d{2}\s{0,}\d{2}[:]\d{2}[:]\d{2})"
+
+endTime = "(\d{2}[/|-]\d{2}[/|-]\d{2}\s{0,}\d{2}[:]\d{2}[:]\d{2})"
+
+regexNames = ["Activity Status", "Database", "Table", "Error", "Root_Cause_Analysis", "starttime", "endtime"]
+logsearchRegEx = ["status", "dbName", "tableName", "Error", "Root Cause", "starttime",
+                  "endtime"]  # To be read from JSON
+
+regexList = [errorStatusRegEx, dbnameRegEx, tablenameRegeEx, errorRegEx, errorCuasedByRegEx, startTime, endTime]
+
+
+# def dateInfo(datecontent,path1):
+#
+#     with open ("C:\\Users\\ggummadi\\Downloads\\Python-master\\Python-master\\stderr", "r") as myfile:
+#         data = myfile.readlines()
+#         regExData = "(\d{2}[/|-]\d{2}[/|-]\d{2}\s{0,}\d{2}[:]\d{2}[:]\d{2})"
+#         strjoin = ''.join(data)
+#         time = re.findall(regExData, strjoin)
+#         #print(time)
+#         startTime = time[0]
+#         endTime = time[-1]
+#         #
+#         print("Starttime:" + startTime)
+#         print("endtime: "+ endTime)
+
+
+def extractInfo(content, filename):
+    lines = content.split("\n")
+    words = content.split(" ")
+    most = max(set(words), key=words.count)
+    print  # (most)
+    sparkCount = content.count("Spark")
+    hiveCount = content.lower().count("hive")
+
+    errorjson = {}
+
+    # timestart = re.findall(startTime.lower(), str(val).lower())
+    # if timestart:
+    #     errorjson["starttime"] = timestart[0]
+    #     errorjson["endtime"] = timestart[-1]
+
+    if sparkCount:
+        value = re.findall("Exception\s\w+.*",content)
+        print(value)
+        if value == None:
+            print("restart of spark jobs is required")
+
+
+    for index, exp in enumerate(regexList):
+
+        values = re.findall(exp.lower(), str(content).lower())
+        val = list(set(values))
+        timestart = re.findall(startTime.lower(), content)
+        if timestart:
+            errorjson["starttime"] = timestart[0]
+            errorjson["endtime"] = timestart[-1]
+
+        if (val):
+            if len(val) == 1:
+                # print(val)
+                stmsg = " ".join(val)
+                # print(stmsg)
+                exp1 = "^" + str(logsearchRegEx[index]) + ":\\\s{0,}(\\\w+)"
+
+                exp = "\"" + str(logsearchRegEx[index]) + ":(.*)\""
+
+                print  # (stmsg.strip()+"------>"+exp+"--------->"+logsearchRegEx[index])
+                if str(logsearchRegEx[index]).lower() in stmsg.lower():
+                    # print(stmsg.split(":")[-1].strip().title())
+                    # print(logsearchRegEx[index])
+                    # print(regexNames[index])
+                    errorjson[regexNames[index]] = stmsg.split(":")[-1].strip().title()
+
+
+            else:
+
+                subList = val[1:]
+                threshold_ratio = 0.75
+                ratios = []
+                val.sort(key=len)
+
+                for value, value2 in itertools.combinations(val, 2):
+                    ratio = difflib.SequenceMatcher(None, value, value2).ratio()
+                    ratios.append(ratio)
+                    if "Root_Cause_Analysis".lower() in str(regexNames[index]).lower():
+                        print  # (value+">>>>"+value2+">>>>"+str(ratio))
+                        if ratio >= 0.40 and ratio <= 0.47:
+                            print  # (value+">>>>"+value2+">>>>"+str(ratio))
+                            # errorjson[str(regexNames[index])] = value
+                            print  # ("======================================")
+                sortedRatios = sorted(set(ratios))
+                print  # (sortedRatios)
+
+                if "Root_Cause_Analysis".lower() in str(regexNames[index]).lower():
+                    errorjson[str(regexNames[index]) + " Msg1"] = val[0]
+                    errorjson[str(regexNames[index]) + " Msg2"] = val[1]  # value
+                    match = re.search("\[\\d{0,},\\s{0,}\\d{0,},\\s{0,}\\d{0,}\],\\D{2}",
+                                      str(errorjson[str(regexNames[index]) + " Msg1"]).lower())
+                    errorjson["Action Param"] = match.group()[-2:]
+
+                    # else:
+                #     dateVal =re.findall(dateRegEx.lower(),str(val).lower())
+                #     if dateVal :
+                #         errorjson["starttime"] = dateVal[0]
+                #         #errorjson["endtime"] =dateVal[-1]
+                #     errorjson[str(regexNames[index])+" Msg1"] = val[0]
+                #     errorjson[str(regexNames[index])+" Msg2"] = val[1] #value
+
+    # timestart = re.findall(startTime.lower(), str(val).lower())
+    # if timestart:
+    #     errorjson["starttime"] = timestart[0]
+    #     errorjson["endtime"] = timestart[-1]
+
+    if "Activity Status".lower() in str(errorjson.keys()).lower():
+        if sparkCount > hiveCount:
+            errorjson["Activity"] = "Spark"
+        if sparkCount < hiveCount:
+            errorjson["Activity"] = "Hive"
+        if "Spark".lower() in str(errorjson["Activity"]).lower():
+            errorjson["Action"] = "Spark Action"
+        if "Hive".lower() in str(errorjson["Activity"]).lower():
+            errorjson[
+                "Action"] = "java -jar C:\\Users\\ggummadi\\Downloads\\jenkins-cli.jar -s http://104.196.159.76:8080  build  hive-test -f --username admin --password admin"
+        print(json.dumps(errorjson, indent=1))
+
+
+def readSource(sourceData, isTest):
+    for path in sourceData:
+        print("-----" + str(path))
+        file = open(path, "r")
+        filename = os.path.basename(str(path))
+        # print(file.read())
+        extractInfo(str(file.read()), filename)
+        # dateInfo(file,path)
+
+
+def sourceConnector(excelDirPath, isTest):
+    print(isTest)
+    pathlist = Path(excelDirPath).glob('**/*')
+    # print(str(pathlist))
+    readSource(pathlist, isTest)
+
+
+sourceConnector("C:/Users/ggummadi/Desktop/desktop/petra-master/petra-master", False)
